@@ -477,25 +477,82 @@ function homeView(){const now=Date.now(),open=S.tasks.filter(t=>t.status!=="done
   <div class="sec">🏆 ترتيب الإدارات — ${monthName(S.month)}</div><div class="card">${r.depts.length?r.depts.sort((a,b)=>(b.pct??-1)-(a.pct??-1)).map((d,i)=>`<div class="row" style="padding:8px 0"><b style="width:24px;color:var(--mu)">${["🥇","🥈","🥉"][i]||i+1}</b><div class="grow"><div style="font-size:13.5px;font-weight:600;margin-bottom:5px">${esc(d.d)}</div><div class="bar"><i style="width:${d.pct??0}%"></i></div></div><span class="pill ${scoreLabel(d.pct)[1]}">${d.pct??"—"}${d.pct!=null?"%":""}</span></div>`).join(""):'<p class="mu c">لسه مفيش تكليفات الشهر ده</p>'}</div>
   ${!od.length&&!soon.length&&!open.length?'<div class="empty"><div class="e">✨</div>مفيش تكليفات جارية. ابدأ اجتماع أو ضيف تكليف.</div>':""}`}
 
+/* ---------- AI (Firebase AI Logic — Gemini, مجاني) ---------- */
+const AI={model:null,models:["gemini-3.6-flash","gemini-3.5-flash","gemini-3.5-flash-lite","gemini-2.5-flash"],busy:false,auto:true,timer:null,err:""};
+async function aiModelFor(name){
+  const V="13.2.0",B="https://www.gstatic.com/firebasejs/"+V+"/";
+  const appM=await import(B+"firebase-app.js"),aiM=await import(B+"firebase-ai.js");
+  const app=appM.getApps().find(a=>a.name==="ai")||appM.initializeApp(C.firebase,"ai");
+  const ai=aiM.getAI(app,{backend:new aiM.GoogleAIBackend()});
+  return aiM.getGenerativeModel(ai,{model:name,generationConfig:{responseMimeType:"application/json",temperature:0.2}});
+}
+async function aiGenerate(prompt){
+  const saved=store.get("hio_ai_model",null);const list=saved?[saved,...AI.models.filter(m=>m!==saved)]:AI.models;let last;
+  for(const name of list){try{const m=await aiModelFor(name);const r=await m.generateContent(prompt);store.set("hio_ai_model",name);return r.response.text()}
+    catch(e){last=e;const s=String(e&&e.message||e);if(!/not found|404|not supported|unsupported|NOT_FOUND|is not found/i.test(s))break}}
+  throw last;
+}
+function cairoNow(){return new Date().toLocaleString("ar-EG",{timeZone:"Africa/Cairo",weekday:"long",year:"numeric",month:"long",day:"numeric",hour:"numeric",minute:"2-digit"})+" (ISO: "+new Date().toISOString()+")"}
+function aiPrompt(lines,done){
+  const emps=employees().map(u=>u.name+" ("+u.dept+")").join("، ")||"—";
+  return `أنت سكرتير تنفيذي محترف في ${C.orgName}. أمامك جمل من تفريغ صوتي لاجتماع مدير الفرع مع العاملين (لهجة مصرية وقد تحتوي أخطاء تفريغ).
+المطلوب: استخرج فقط التكليفات/المهام الفعلية المطلوب تنفيذها (تجاهل الكلام العام والتحيات والتعليقات).
+لكل تكليف:
+- "title": إعادة صياغة التكليف بصيغة رسمية مختصرة بالعربية الفصحى تبدأ بمصدر (مثل: إعداد، موافاة، مراجعة، تحديث، حصر...) — بحد أقصى 15 كلمة.
+- "details": صيغة رسمية كاملة بأسلوب المكاتبات الحكومية، مثل: "يُرجى من إدارة ... التكرم بـ ... وموافاة السيد مدير الفرع بـ ... في موعد أقصاه ...".
+- "dept": الإدارة المختصة، ويجب أن تكون واحدة بالنص الحرفي من القائمة: [${C.departments.join("، ")}]. اختر الأنسب حسب طبيعة المهمة.
+- "assignee": اسم موظف بعينه فقط لو اتذكر صراحة، من القائمة: [${emps}]، وإلا "".
+- "deadline": الموعد النهائي لو اتذكر (مثل: بكرة، يوم الخميس، آخر الأسبوع، خلال يومين) بصيغة ISO 8601 بتوقيت القاهرة (+02:00)، ونهاية يوم العمل الساعة 14:00 لو الساعة مش محددة. لو مفيش موعد اكتب "".
+- "urgent": true لو قال عاجل/فورًا/النهارده.
+- "source": الجملة الأصلية من التفريغ.
+الوقت الحالي: ${cairoNow()}.
+تكليفات اتسجلت قبل كده (لا تكررها): ${done.length?done.map(t=>"«"+t+"»").join("، "):"لا يوجد"}.
+جمل التفريغ:
+${lines.map((l,i)=>(i+1)+". "+l).join("\n")}
+أرجع JSON فقط بالشكل: {"tasks":[{"title":"","details":"","dept":"","assignee":"","deadline":"","urgent":false,"source":""}]} — ولو مفيش تكليفات: {"tasks":[]}`;
+}
+function aiDates(t){const now=Date.now();let d3=Date.parse(t.deadline||"");
+  if(!(d3>now+3600e3)){const dd=t.urgent?[0.25,1,2]:C.defaultDueDays;return{d1:now+dd[0]*DAY,d2:now+dd[1]*DAY,d3:now+dd[2]*DAY}}
+  const span=d3-now;return{d1:Math.round(now+span*0.5),d2:Math.round(now+span*0.75),d3}}
+function aiMatchDept(d){d=(d||"").trim();if(C.departments.includes(d))return d;const n=s=>s.replace(/[إأآ]/g,"ا").replace(/ة/g,"ه").replace(/ى/g,"ي").replace(/^ال/,"").replace(/\s+ال/g," ");
+  const w=t=>n(t).split(/\s+/).filter(Boolean),has=(A,B)=>A.every(k=>B.includes(k));return C.departments.find(x=>n(x)===n(d))||C.departments.find(x=>has(w(x),w(d))||(w(d).length&&has(w(d),w(x))))||""}
+async function aiAnalyze(manual){const m=S.meeting;if(!m||AI.busy)return;const from=m.aiUpTo||0;const lines=m.transcript.slice(from).map(l=>l.x).filter(Boolean);
+  if(!lines.length){if(manual)toast("مفيش كلام جديد يتحلل");return}
+  AI.busy=true;AI.err="";upAI();
+  try{const txt=await aiGenerate(aiPrompt(lines,m.tasks.map(t=>t.title)));let j;try{j=JSON.parse(txt)}catch(e){j=JSON.parse((txt.match(/\{[\s\S]*\}/)||["{}"])[0])}
+    const list=(j.tasks||[]).filter(t=>t&&t.title);let n=0;
+    for(const t of list){const dept=aiMatchDept(t.dept);const emp=t.assignee?employees().find(u=>u.name.trim()===String(t.assignee).trim()||String(t.assignee).includes(u.name)):null;
+      m.tasks.push({title:String(t.title).trim(),details:String(t.details||"").trim(),dept:dept||(emp&&emp.dept)||C.departments[0],assignee:emp?emp.id:"",...aiDates(t),ai:true,source:String(t.source||""),needsDept:!dept&&!emp});n++}
+    m.aiUpTo=from+m.transcript.slice(from).length;
+    if(n)toast("🤖 اتضاف "+n+" تكليف بالذكاء الاصطناعي");else if(manual)toast("🤖 مالقيتش تكليفات جديدة في الكلام");
+  }catch(e){console.warn(e);AI.err=/quota|429|exhausted/i.test(String(e))?"وصلنا للحد المجاني للذكاء الاصطناعي في الدقيقة — هيكمل تلقائي بعد شوية":"الذكاء الاصطناعي مش متاح دلوقتي ("+String(e&&e.message||e).slice(0,80)+")";
+    if(/quota|429|exhausted/i.test(String(e)))setTimeout(()=>aiAnalyze(),60000)}
+  AI.busy=false;render()}
+function aiSchedule(){if(!AI.auto)return;clearTimeout(AI.timer);AI.timer=setTimeout(()=>aiAnalyze(),6000)}
+function upAI(){const el=$("#aist");if(el)el.innerHTML=aiStatus()}
+function aiStatus(){return AI.busy?'<span class="pill b">🤖 بيحلل الكلام ويستخرج التكليفات…</span>':AI.auto?'<span class="pill g">🤖 التحليل التلقائي شغال</span>':'<span class="pill n">🤖 التحليل التلقائي متوقف</span>'}
+function editDraft(i){const t=S.meeting.tasks[i];sheet(`<h3 style="margin-top:0">مراجعة التكليف</h3>${t.source?`<p class="mu" style="font-size:12.5px;margin-top:-4px">🎙 «${esc(t.source)}»</p>`:""}${taskForm(t,"x")}<button class="btn p2 big" style="margin-top:12px" id="xsv">حفظ</button>`);fillAssignees("x");
+  $("#xsv").onclick=()=>{const n=readForm("x");if(!n)return;Object.assign(t,n,{needsDept:false});closeSheet();render()}}
+
 /* manager: meeting */
 const Rec={sr:null,on:false,mr:null,chunks:[],audioUrl:null,interim:"",wake:null};
 function meetView(){const m=S.meeting;
-  if(!m)return`<div class="card c"><button class="mic" onclick="startMeeting()">🎙️</button><h3 style="margin:8px 0 4px">اجتماع جديد</h3><p class="mu" style="font-size:13.5px;margin:0 0 6px;line-height:1.8">الكلام بيتكتب لحظة بلحظة ← اضغط ＋ جنب أي جملة تتحول تكليف ← "حفظ وتوزيع" يوصل كل تكليف لإدارته فورًا.</p>
+  if(!m)return`<div class="card c"><button class="mic" onclick="startMeeting()">🎙️</button><h3 style="margin:8px 0 4px">اجتماع جديد</h3><p class="mu" style="font-size:13.5px;margin:0 0 6px;line-height:1.8">الكلام بيتكتب جملة جملة ← 🤖 الذكاء الاصطناعي بيفهم التكليفات ويصيغها رسميًا ويحدد الإدارة والمواعيد ← راجعها واضغط "حفظ وتوزيع" تروح لكل إدارة فورًا.</p>
   <label class="f" style="text-align:right">عنوان الاجتماع</label><input id="mtt" value="اجتماع ${new Date().toLocaleDateString("ar-EG",{day:"numeric",month:"long"})}">
   <button class="btn p2 big" style="margin-top:14px" onclick="startMeeting()">▶︎ ابدأ الاجتماع</button>${speechOK()?"":'<div class="banner r" style="margin-top:12px">التفريغ الصوتي اللحظي محتاج متصفح Chrome (أندرويد أو كمبيوتر). تقدر تكمّل وتكتب الملاحظات يدوي.</div>'}</div>
   ${S.meetings.length?`<div class="sec">الاجتماعات السابقة</div>${S.meetings.slice().sort((a,b)=>b.date-a.date).map(x=>`<div class="card" style="cursor:pointer" onclick="showMeeting('${x.id}')"><div class="row"><b class="grow">🗓 ${esc(x.title)}</b><span class="pill n">${fmt(x.date,false)}</span></div><div class="mu" style="font-size:12.5px;margin-top:4px">${S.tasks.filter(t=>t.meetingId===x.id).length} تكليف · ${(x.transcript||[]).length} جملة</div></div>`).join("")}`:""}`;
   return`<div class="card"><div class="row"><h3 class="grow" style="margin:0">${esc(m.title)}</h3>${Rec.on?'<span class="rec"><i></i>بيسجّل</span>':""}</div>
   <div class="row" style="margin:12px 0">${Rec.on?'<button class="btn d grow" onclick="stopRec()">⏸ إيقاف التسجيل</button>':'<button class="btn p2 grow" onclick="startRec()">🎙️ '+(m.transcript.length?"استكمال التسجيل":"ابدأ التسجيل")+'</button>'}${Rec.audioUrl?`<a class="btn w" href="${Rec.audioUrl}" download="meeting-${Date.now()}.webm" style="text-decoration:none">⬇︎ الصوت</a>`:""}</div>
-  ${Rec.on?`<div class="row" style="margin-bottom:8px"><span id="srst">${srStatus()}</span><div class="bar grow" title="مستوى صوت المايك"><i id="lvl" style="width:0%;transition:width .1s"></i></div></div>`:""}${Rec.err?`<div class="banner r">⚠️ ${esc(Rec.err)}</div>`:""}<div class="tr" id="trbox">${m.transcript.length?m.transcript.map((l,i)=>`<div class="ln"><time>${new Date(l.t).toLocaleTimeString("ar-EG",{hour:"numeric",minute:"2-digit"})}</time><p>${esc(l.x)}</p><button class="btn s sm" onclick="lineToTask(${i})">＋ تكليف</button></div>`).join(""):'<p class="mu c" style="font-size:13px">الكلام هيظهر هنا وانت بتتكلم…</p>'}<div class="interim" id="interim">${esc(Rec.interim)}</div></div>
+  ${Rec.on?`<div class="row" style="margin-bottom:8px"><span id="srst">${srStatus()}</span><div class="bar grow" title="مستوى صوت المايك"><i id="lvl" style="width:0%;transition:width .1s"></i></div></div>`:""}${Rec.err?`<div class="banner r">⚠️ ${esc(Rec.err)}</div>`:""}<div class="row" style="margin-bottom:8px"><span id="aist">${aiStatus()}</span><span class="grow"></span><button class="btn w sm" onclick="AI.auto=!AI.auto;render()">${AI.auto?"إيقاف التلقائي":"تشغيل التلقائي"}</button><button class="btn s sm" onclick="aiAnalyze(true)" ${AI.busy?"disabled":""}>🤖 حلّل دلوقتي</button></div>${AI.err?`<div class="banner">🤖 ${esc(AI.err)}</div>`:""}<div class="tr" id="trbox">${m.transcript.length?m.transcript.map((l,i)=>`<div class="ln"><time>${new Date(l.t).toLocaleTimeString("ar-EG",{hour:"numeric",minute:"2-digit"})}</time><p>${esc(l.x)}</p><button class="btn s sm" onclick="lineToTask(${i})">＋ تكليف</button></div>`).join(""):'<p class="mu c" style="font-size:13px">الكلام هيظهر هنا وانت بتتكلم…</p>'}<div class="interim" id="interim">${esc(Rec.interim)}</div></div>
   <div class="row" style="margin-top:8px"><input id="manl" class="grow" placeholder="أو اكتب ملاحظة يدوي…"><button class="btn s" onclick="addManual()">إضافة</button></div></div>
   <div class="card" id="tfcard"><h3>＋ إضافة تكليف</h3>${taskForm(null,"m")}<button class="btn s big" style="margin-top:12px" onclick="addDraft()">إضافة للقائمة</button></div>
   <div class="sec">التكليفات في الاجتماع ده (${m.tasks.length})</div>
-  ${m.tasks.length?m.tasks.map((t,i)=>`<div class="task"><div class="row"><div class="grow">${deptChip(t.dept)}<h4>${esc(t.title)}</h4><div class="meta">${t.assignee?" · 👤 "+esc(userName(t.assignee)):""} · النهائي ${fmt(t.d3)}</div></div><button class="btn d sm" onclick="S.meeting.tasks.splice(${i},1);render()">✕</button></div></div>`).join(""):'<p class="mu c">لسه مفيش تكليفات</p>'}
+  ${m.tasks.length?m.tasks.map((t,i)=>`<div class="task ${t.needsDept?"y":""}"><div class="row" style="justify-content:space-between">${deptChip(t.dept)}${t.ai?'<span class="pill b">🤖 ذكاء اصطناعي</span>':'<span class="pill n">✍️ يدوي</span>'}</div><h4>${esc(t.title)}</h4>${t.details?`<p style="margin:2px 0 6px;font-size:13px;line-height:1.8">${esc(t.details)}</p>`:""}${t.needsDept?'<div class="banner" style="margin:6px 0">⚠️ الذكاء الاصطناعي مش متأكد من الإدارة — راجعها</div>':""}<div class="meta">${t.assignee?"👤 "+esc(userName(t.assignee))+" · ":"👥 كل الإدارة · "}الأول ${fmt(t.d1)} · الثاني ${fmt(t.d2)} · <b>النهائي ${fmt(t.d3)}</b></div><div class="row" style="margin-top:10px"><button class="btn w sm" onclick="editDraft(${i})">✏️ مراجعة وتعديل</button><button class="btn d sm" onclick="S.meeting.tasks.splice(${i},1);render()">✕ حذف</button></div></div>`).join(""):'<p class="mu c">لسه مفيش تكليفات</p>'}
   <button class="btn p2 big" style="margin-top:6px" onclick="saveMeeting()" ${m.tasks.length?"":"disabled"}>💾 حفظ الاجتماع وتوزيع ${m.tasks.length} تكليف</button>
   <button class="btn w big" style="margin-top:8px" onclick="cancelMeeting()">إلغاء الاجتماع</button>`}
 function bindMeet(){if(S.meeting){fillAssignees("m");const b=$("#trbox");if(b)b.scrollTop=b.scrollHeight}}
 function speechOK(){return!!(window.SpeechRecognition||window.webkitSpeechRecognition)}
-function startMeeting(){S.meeting={title:$("#mtt").value.trim()||"اجتماع",date:Date.now(),transcript:[],tasks:[]};render();startRec()}
+function startMeeting(){S.meeting={title:$("#mtt").value.trim()||"اجتماع",date:Date.now(),transcript:[],tasks:[],aiUpTo:0};render();startRec()}
 async function startRec(){
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
   const mobile=/Android|iPhone|iPad/i.test(navigator.userAgent);
@@ -507,25 +564,25 @@ async function startRec(){
     try{const ac=new (window.AudioContext||window.webkitAudioContext)();const an=ac.createAnalyser();an.fftSize=512;ac.createMediaStreamSource(st).connect(an);const buf=new Uint8Array(an.fftSize);Rec.ac=ac;
       const tick=()=>{if(!Rec.on)return;an.getByteTimeDomainData(buf);let m=0;for(const b of buf)m=Math.max(m,Math.abs(b-128));const el=$("#lvl");if(el)el.style.width=Math.min(100,m*2)+"%";requestAnimationFrame(tick)};tick()}catch(e){}
   }catch(e){if(!SR){Rec.on=false;toast("لازم تسمح بالمايكروفون");render();return}}}
-  if(SR){const sr=new SR();sr.lang="ar-EG";sr.continuous=true;sr.interimResults=true;sr.maxAlternatives=1;
+  if(SR){const sr=new SR();sr.lang="ar-EG";sr.continuous=mobile;sr.interimResults=true;sr.maxAlternatives=1;
     const st=s=>{Rec.status=s;const el=$("#srst");if(el)el.innerHTML=srStatus()};
     sr.onstart=()=>st("listen");sr.onspeechstart=()=>st("speech");
-    sr.onresult=e=>{let it="";for(let i=e.resultIndex;i<e.results.length;i++){const r=e.results[i];if(r.isFinal){const x=r[0].transcript.trim();if(x){S.meeting.transcript.push({t:Date.now(),x});Rec.interim="";Rec.err="";render();}}else it+=r[0].transcript}Rec.interim=it;const el=$("#interim");if(el)el.textContent=it;st("speech")};
+    sr.onresult=e=>{let it="";for(let i=e.resultIndex;i<e.results.length;i++){const r=e.results[i];if(r.isFinal){const x=r[0].transcript.trim();if(x){S.meeting.transcript.push({t:Date.now(),x});Rec.interim="";Rec.err="";render();aiSchedule();}}else it+=r[0].transcript}Rec.interim=it;const el=$("#interim");if(el)el.textContent=it;st("speech")};
     sr.onerror=e=>{if(e.error==="no-speech"||e.error==="aborted")return;
       const M={"not-allowed":"المايكروفون مقفول — اضغط على علامة القفل جنب اللينك فوق واسمح بالمايكروفون","service-not-allowed":"المتصفح مانع خدمة التفريغ — استخدم Google Chrome","audio-capture":"المايكروفون مش متاح أو برنامج تاني ماسكه — اقفل أي برنامج تسجيل شاشة أو مكالمات","network":"التفريغ محتاج إنترنت — اتأكد من الاتصال","language-not-supported":"اللغة العربية مش مدعومة على المتصفح ده"};
       Rec.err=M[e.error]||("مشكلة في التفريغ: "+e.error);if(["not-allowed","service-not-allowed","audio-capture","language-not-supported"].includes(e.error))Rec.fatal=true;render()};
-    sr.onend=()=>{st("");if(Rec.on&&!Rec.fatal)setTimeout(()=>{if(Rec.on)try{sr.start()}catch(x){}},300)};
+    sr.onend=()=>{st("");if(Rec.on&&!Rec.fatal)setTimeout(()=>{if(Rec.on)try{sr.start()}catch(x){}},mobile?300:60)};
     Rec.fatal=false;try{sr.start()}catch(e){Rec.err="مشكلة في تشغيل التفريغ: "+e.message}Rec.sr=sr}
   else Rec.err="المتصفح ده مش بيدعم التفريغ الصوتي — افتح التطبيق من Google Chrome";
   render();
 }
 function srStatus(){return Rec.status==="speech"?'<span class="pill g">🗣 سامع كلام وبيكتب…</span>':Rec.status==="listen"?'<span class="pill b">🎧 بيسمع — اتكلم</span>':'<span class="pill n">⏳ بيجهّز…</span>'}
-function stopRec(){Rec.on=false;try{Rec.sr&&Rec.sr.stop()}catch(e){}try{Rec.mr&&Rec.mr.state!=="inactive"&&Rec.mr.stop()}catch(e){}try{Rec.stream&&Rec.stream.getTracks().forEach(t=>t.stop())}catch(e){}try{Rec.ac&&Rec.ac.close()}catch(e){}try{Rec.wake&&Rec.wake.release()}catch(e){}if(Rec.interim){S.meeting.transcript.push({t:Date.now(),x:Rec.interim});Rec.interim=""}Rec.status="";render()}
-function addManual(){const v=$("#manl").value.trim();if(!v)return;S.meeting.transcript.push({t:Date.now(),x:v});render()}
+function stopRec(){Rec.on=false;try{Rec.sr&&Rec.sr.stop()}catch(e){}try{Rec.mr&&Rec.mr.state!=="inactive"&&Rec.mr.stop()}catch(e){}try{Rec.stream&&Rec.stream.getTracks().forEach(t=>t.stop())}catch(e){}try{Rec.ac&&Rec.ac.close()}catch(e){}try{Rec.wake&&Rec.wake.release()}catch(e){}if(Rec.interim){S.meeting.transcript.push({t:Date.now(),x:Rec.interim});Rec.interim=""}Rec.status="";render();if(AI.auto)aiAnalyze()}
+function addManual(){const v=$("#manl").value.trim();if(!v)return;S.meeting.transcript.push({t:Date.now(),x:v});render();aiSchedule()}
 function lineToTask(i){$("#mti").value=S.meeting.transcript[i].x;const dep=C.departments.find(d=>S.meeting.transcript[i].x.includes(d.replace(/^ال/,"").split(" ").pop()));if(dep){$("#mdp").value=dep;fillAssignees("m")}$("#tfcard").scrollIntoView({behavior:"smooth"});$("#mti").focus()}
 function addDraft(){const t=readForm("m");if(!t)return;S.meeting.tasks.push(t);toast("اتضاف ✓");render();$("#tfcard").scrollIntoView()}
 async function saveMeeting(){const m=S.meeting;if(Rec.on)stopRec();const now=Date.now();
-  try{await DB.saveMeeting({title:m.title,date:m.date,transcript:m.transcript,createdBy:S.user.id,taskCount:m.tasks.length},m.tasks.map(t=>({...t,status:"open",doneAt:null,doneBy:null,createdAt:now})));
+  try{await DB.saveMeeting({title:m.title,date:m.date,transcript:m.transcript,createdBy:S.user.id,taskCount:m.tasks.length},m.tasks.map(({needsDept,...t})=>({...t,status:"open",doneAt:null,doneBy:null,createdAt:now})));
   S.meeting=null;toast("الاجتماع اتحفظ والتكليفات اتوزعت على الإدارات ✓");S.tab="tasks";render()}catch(x){toast(errMsg(x))}}
 function cancelMeeting(){if(!confirm("إلغاء الاجتماع؟ التفريغ والتكليفات اللي مش محفوظة هتضيع."))return;if(Rec.on)stopRec();S.meeting=null;render()}
 function showMeeting(id){const m=S.meetings.find(x=>x.id===id);const ts=S.tasks.filter(t=>t.meetingId===id);
