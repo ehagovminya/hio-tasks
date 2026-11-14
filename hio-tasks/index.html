@@ -486,7 +486,7 @@ function meetView(){const m=S.meeting;
   ${S.meetings.length?`<div class="sec">الاجتماعات السابقة</div>${S.meetings.slice().sort((a,b)=>b.date-a.date).map(x=>`<div class="card" style="cursor:pointer" onclick="showMeeting('${x.id}')"><div class="row"><b class="grow">🗓 ${esc(x.title)}</b><span class="pill n">${fmt(x.date,false)}</span></div><div class="mu" style="font-size:12.5px;margin-top:4px">${S.tasks.filter(t=>t.meetingId===x.id).length} تكليف · ${(x.transcript||[]).length} جملة</div></div>`).join("")}`:""}`;
   return`<div class="card"><div class="row"><h3 class="grow" style="margin:0">${esc(m.title)}</h3>${Rec.on?'<span class="rec"><i></i>بيسجّل</span>':""}</div>
   <div class="row" style="margin:12px 0">${Rec.on?'<button class="btn d grow" onclick="stopRec()">⏸ إيقاف التسجيل</button>':'<button class="btn p2 grow" onclick="startRec()">🎙️ '+(m.transcript.length?"استكمال التسجيل":"ابدأ التسجيل")+'</button>'}${Rec.audioUrl?`<a class="btn w" href="${Rec.audioUrl}" download="meeting-${Date.now()}.webm" style="text-decoration:none">⬇︎ الصوت</a>`:""}</div>
-  <div class="tr" id="trbox">${m.transcript.length?m.transcript.map((l,i)=>`<div class="ln"><time>${new Date(l.t).toLocaleTimeString("ar-EG",{hour:"numeric",minute:"2-digit"})}</time><p>${esc(l.x)}</p><button class="btn s sm" onclick="lineToTask(${i})">＋ تكليف</button></div>`).join(""):'<p class="mu c" style="font-size:13px">الكلام هيظهر هنا وانت بتتكلم…</p>'}<div class="interim" id="interim">${esc(Rec.interim)}</div></div>
+  ${Rec.on?`<div class="row" style="margin-bottom:8px"><span id="srst">${srStatus()}</span><div class="bar grow" title="مستوى صوت المايك"><i id="lvl" style="width:0%;transition:width .1s"></i></div></div>`:""}${Rec.err?`<div class="banner r">⚠️ ${esc(Rec.err)}</div>`:""}<div class="tr" id="trbox">${m.transcript.length?m.transcript.map((l,i)=>`<div class="ln"><time>${new Date(l.t).toLocaleTimeString("ar-EG",{hour:"numeric",minute:"2-digit"})}</time><p>${esc(l.x)}</p><button class="btn s sm" onclick="lineToTask(${i})">＋ تكليف</button></div>`).join(""):'<p class="mu c" style="font-size:13px">الكلام هيظهر هنا وانت بتتكلم…</p>'}<div class="interim" id="interim">${esc(Rec.interim)}</div></div>
   <div class="row" style="margin-top:8px"><input id="manl" class="grow" placeholder="أو اكتب ملاحظة يدوي…"><button class="btn s" onclick="addManual()">إضافة</button></div></div>
   <div class="card" id="tfcard"><h3>＋ إضافة تكليف</h3>${taskForm(null,"m")}<button class="btn s big" style="margin-top:12px" onclick="addDraft()">إضافة للقائمة</button></div>
   <div class="sec">التكليفات في الاجتماع ده (${m.tasks.length})</div>
@@ -497,20 +497,30 @@ function bindMeet(){if(S.meeting){fillAssignees("m");const b=$("#trbox");if(b)b.
 function speechOK(){return!!(window.SpeechRecognition||window.webkitSpeechRecognition)}
 function startMeeting(){S.meeting={title:$("#mtt").value.trim()||"اجتماع",date:Date.now(),transcript:[],tasks:[]};render();startRec()}
 async function startRec(){
-  try{const st=await navigator.mediaDevices.getUserMedia({audio:true});Rec.stream=st;
-    if(window.MediaRecorder){Rec.mr=new MediaRecorder(st);Rec.mr.ondataavailable=e=>e.data.size&&Rec.chunks.push(e.data);Rec.mr.onstop=()=>{Rec.audioUrl=URL.createObjectURL(new Blob(Rec.chunks,{type:Rec.mr.mimeType||"audio/webm"}));render()};Rec.mr.start(5000)}
-  }catch(e){toast("لازم تسمح بالمايكروفون");return}
-  try{Rec.wake=await navigator.wakeLock?.request("screen")}catch(e){}
-  Rec.on=true;
   const SR=window.SpeechRecognition||window.webkitSpeechRecognition;
-  if(SR){const sr=new SR();sr.lang="ar-EG";sr.continuous=true;sr.interimResults=true;
-    sr.onresult=e=>{let it="";for(let i=e.resultIndex;i<e.results.length;i++){const r=e.results[i];if(r.isFinal){const x=r[0].transcript.trim();if(x){S.meeting.transcript.push({t:Date.now(),x});Rec.interim="";render();}}else it+=r[0].transcript}Rec.interim=it;const el=$("#interim");if(el)el.textContent=it};
-    sr.onerror=e=>{if(e.error==="not-allowed"){toast("المايكروفون مقفول");Rec.on=false;render()}};
-    sr.onend=()=>{if(Rec.on)try{sr.start()}catch(e){}};
-    try{sr.start()}catch(e){}Rec.sr=sr}
+  const mobile=/Android|iPhone|iPad/i.test(navigator.userAgent);
+  Rec.err="";Rec.status="";Rec.on=true;
+  try{Rec.wake=await navigator.wakeLock?.request("screen")}catch(e){}
+  // على الموبايل المايك مينفعش يتسجل ويتفرّغ في نفس الوقت — التفريغ له الأولوية
+  if(!mobile||!SR){try{const st=await navigator.mediaDevices.getUserMedia({audio:true});Rec.stream=st;
+    if(window.MediaRecorder){Rec.chunks=[];Rec.mr=new MediaRecorder(st);Rec.mr.ondataavailable=e=>e.data.size&&Rec.chunks.push(e.data);Rec.mr.onstop=()=>{Rec.audioUrl=URL.createObjectURL(new Blob(Rec.chunks,{type:Rec.mr.mimeType||"audio/webm"}));render()};Rec.mr.start(5000)}
+    try{const ac=new (window.AudioContext||window.webkitAudioContext)();const an=ac.createAnalyser();an.fftSize=512;ac.createMediaStreamSource(st).connect(an);const buf=new Uint8Array(an.fftSize);Rec.ac=ac;
+      const tick=()=>{if(!Rec.on)return;an.getByteTimeDomainData(buf);let m=0;for(const b of buf)m=Math.max(m,Math.abs(b-128));const el=$("#lvl");if(el)el.style.width=Math.min(100,m*2)+"%";requestAnimationFrame(tick)};tick()}catch(e){}
+  }catch(e){if(!SR){Rec.on=false;toast("لازم تسمح بالمايكروفون");render();return}}}
+  if(SR){const sr=new SR();sr.lang="ar-EG";sr.continuous=true;sr.interimResults=true;sr.maxAlternatives=1;
+    const st=s=>{Rec.status=s;const el=$("#srst");if(el)el.innerHTML=srStatus()};
+    sr.onstart=()=>st("listen");sr.onspeechstart=()=>st("speech");
+    sr.onresult=e=>{let it="";for(let i=e.resultIndex;i<e.results.length;i++){const r=e.results[i];if(r.isFinal){const x=r[0].transcript.trim();if(x){S.meeting.transcript.push({t:Date.now(),x});Rec.interim="";Rec.err="";render();}}else it+=r[0].transcript}Rec.interim=it;const el=$("#interim");if(el)el.textContent=it;st("speech")};
+    sr.onerror=e=>{if(e.error==="no-speech"||e.error==="aborted")return;
+      const M={"not-allowed":"المايكروفون مقفول — اضغط على علامة القفل جنب اللينك فوق واسمح بالمايكروفون","service-not-allowed":"المتصفح مانع خدمة التفريغ — استخدم Google Chrome","audio-capture":"المايكروفون مش متاح أو برنامج تاني ماسكه — اقفل أي برنامج تسجيل شاشة أو مكالمات","network":"التفريغ محتاج إنترنت — اتأكد من الاتصال","language-not-supported":"اللغة العربية مش مدعومة على المتصفح ده"};
+      Rec.err=M[e.error]||("مشكلة في التفريغ: "+e.error);if(["not-allowed","service-not-allowed","audio-capture","language-not-supported"].includes(e.error))Rec.fatal=true;render()};
+    sr.onend=()=>{st("");if(Rec.on&&!Rec.fatal)setTimeout(()=>{if(Rec.on)try{sr.start()}catch(x){}},300)};
+    Rec.fatal=false;try{sr.start()}catch(e){Rec.err="مشكلة في تشغيل التفريغ: "+e.message}Rec.sr=sr}
+  else Rec.err="المتصفح ده مش بيدعم التفريغ الصوتي — افتح التطبيق من Google Chrome";
   render();
 }
-function stopRec(){Rec.on=false;try{Rec.sr&&Rec.sr.stop()}catch(e){}try{Rec.mr&&Rec.mr.state!=="inactive"&&Rec.mr.stop()}catch(e){}try{Rec.stream&&Rec.stream.getTracks().forEach(t=>t.stop())}catch(e){}try{Rec.wake&&Rec.wake.release()}catch(e){}if(Rec.interim){S.meeting.transcript.push({t:Date.now(),x:Rec.interim});Rec.interim=""}render()}
+function srStatus(){return Rec.status==="speech"?'<span class="pill g">🗣 سامع كلام وبيكتب…</span>':Rec.status==="listen"?'<span class="pill b">🎧 بيسمع — اتكلم</span>':'<span class="pill n">⏳ بيجهّز…</span>'}
+function stopRec(){Rec.on=false;try{Rec.sr&&Rec.sr.stop()}catch(e){}try{Rec.mr&&Rec.mr.state!=="inactive"&&Rec.mr.stop()}catch(e){}try{Rec.stream&&Rec.stream.getTracks().forEach(t=>t.stop())}catch(e){}try{Rec.ac&&Rec.ac.close()}catch(e){}try{Rec.wake&&Rec.wake.release()}catch(e){}if(Rec.interim){S.meeting.transcript.push({t:Date.now(),x:Rec.interim});Rec.interim=""}Rec.status="";render()}
 function addManual(){const v=$("#manl").value.trim();if(!v)return;S.meeting.transcript.push({t:Date.now(),x:v});render()}
 function lineToTask(i){$("#mti").value=S.meeting.transcript[i].x;const dep=C.departments.find(d=>S.meeting.transcript[i].x.includes(d.replace(/^ال/,"").split(" ").pop()));if(dep){$("#mdp").value=dep;fillAssignees("m")}$("#tfcard").scrollIntoView({behavior:"smooth"});$("#mti").focus()}
 function addDraft(){const t=readForm("m");if(!t)return;S.meeting.tasks.push(t);toast("اتضاف ✓");render();$("#tfcard").scrollIntoView()}
