@@ -483,7 +483,7 @@ async function aiModelFor(name){
   const V="13.2.0",B="https://www.gstatic.com/firebasejs/"+V+"/";
   const appM=await import(B+"firebase-app.js"),aiM=await import(B+"firebase-ai.js");
   const app=appM.getApps().find(a=>a.name==="ai")||appM.initializeApp(C.firebase,"ai");
-  if(C.recaptchaSiteKey&&!AI.appCheck){try{const acM=await import(B+"firebase-app-check.js");AI.appCheck=acM.initializeAppCheck(app,{provider:new acM.ReCaptchaV3Provider(C.recaptchaSiteKey),isTokenAutoRefreshEnabled:true})}catch(e){console.warn("AppCheck",e)}}
+  if(C.recaptchaSiteKey&&!AI.appCheck){try{const acM=await import(B+"firebase-app-check.js");AI.appCheck=acM.initializeAppCheck(app,{provider:new acM.ReCaptchaEnterpriseProvider(C.recaptchaSiteKey),isTokenAutoRefreshEnabled:true})}catch(e){console.warn("AppCheck",e)}}
   const ai=aiM.getAI(app,{backend:new aiM.GoogleAIBackend()});
   return aiM.getGenerativeModel(ai,{model:name,generationConfig:{responseMimeType:"application/json",temperature:0.2}});
 }
