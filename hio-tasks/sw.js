@@ -1,6 +1,6 @@
 // Service worker: offline shell + push notifications (FCM)
 importScripts("config.js");
-const CACHE = "hio-tasks-v3";
+const CACHE = "hio-tasks-v4";
 const SHELL = ["./", "index.html", "config.js", "manifest.json", "icons/icon-192.png", "icons/icon-512.png", "icons/logo.png"];
 const C = self.APP_CONFIG || {};
 if (C.firebase && C.firebase.apiKey) {
@@ -15,7 +15,7 @@ self.addEventListener("fetch", e => {
   const u = new URL(e.request.url);
   if (e.request.method !== "GET" || u.origin !== location.origin) return;
   // network first, fall back to cache (so updates show immediately)
-  e.respondWith(fetch(e.request).then(r => { const cp = r.clone(); caches.open(CACHE).then(c => c.put(e.request, cp)); return r; })
+  e.respondWith(fetch(e.request.url,{cache:"no-cache",credentials:"same-origin"}).then(r => { const cp = r.clone(); caches.open(CACHE).then(c => c.put(e.request, cp)); return r; })
     .catch(() => caches.match(e.request).then(r => r || caches.match("index.html"))));
 });
 self.addEventListener("notificationclick", e => {
