@@ -1,0 +1,50 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ⚠️ اكتب هنا إيميل مدير الفرع (أول حساب مدير بس — الباقي يتعيّنوا من جوه التطبيق)
+    function managerEmails() { return ['ehagovminya@gmail.com']; }
+
+    function signedIn() { return request.auth != null; }
+    function me() { return get(/databases/$(database)/documents/users/$(request.auth.uid)).data; }
+    function hasProfile() { return signedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid)); }
+    function approved() { return hasProfile() && me().approved == true; }
+    function isManager() { return approved() && me().role == 'manager'; }
+
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.auth.uid == uid && (
+        (request.resource.data.role == 'employee' && request.resource.data.approved == false) ||
+        (request.auth.token.email in managerEmails() && request.resource.data.role == 'manager'));
+      allow update: if isManager() ||
+        (signedIn() && request.auth.uid == uid &&
+         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['fcmTokens', 'name']));
+      allow delete: if isManager();
+    }
+
+    // إعدادات النظام (اسم الجهة، الإدارات، التقييم) — المدير بس يعدّلها
+    match /settings/{id} {
+      allow read: if true;
+      allow write: if isManager();
+    }
+
+    match /meetings/{id} {
+      allow read: if approved();
+      allow write: if isManager();
+    }
+
+    match /tasks/{id} {
+      allow read: if approved();
+      allow create, delete: if isManager();
+      allow update: if isManager() || (
+        approved() &&
+        resource.data.status == 'open' &&
+        (resource.data.assignee == request.auth.uid ||
+         (resource.data.assignee == '' && resource.data.dept == me().dept)) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'doneAt', 'doneBy', 'note']) &&
+        request.resource.data.status == 'done' &&
+        request.resource.data.doneBy == request.auth.uid &&
+        request.resource.data.doneAt == request.time   // وقت السيرفر — مستحيل الموظف يزوّر وقت التنفيذ
+      );
+    }
+  }
+}
