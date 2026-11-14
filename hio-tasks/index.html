@@ -205,7 +205,7 @@ html{scroll-behavior:smooth}
 "use strict";
 const C = self.APP_CONFIG;
 const CONFIGURED = !!(C.firebase && C.firebase.apiKey);
-const DEFAULTS = JSON.parse(JSON.stringify({appName:C.appName,orgName:C.orgName,departmentGroups:C.departmentGroups,scores:C.scores,defaultDueDays:C.defaultDueDays,apkUrl:C.apkUrl||""}));
+const DEFAULTS = JSON.parse(JSON.stringify({appName:C.appName,orgName:C.orgName,departmentGroups:C.departmentGroups,scores:C.scores,defaultDueDays:C.defaultDueDays,apkUrl:C.apkUrl||"",recaptchaSiteKey:C.recaptchaSiteKey||""}));
 function applySettings(d){Object.assign(C,JSON.parse(JSON.stringify(DEFAULTS)),d||{});C.scores=Object.assign({},DEFAULTS.scores,(d||{}).scores||{});C.departments=Object.values(C.departmentGroups).flat();document.title=C.appName+" — "+C.orgName}
 applySettings({});
 const DAY = 864e5, HOUR = 36e5;
@@ -483,6 +483,7 @@ async function aiModelFor(name){
   const V="13.2.0",B="https://www.gstatic.com/firebasejs/"+V+"/";
   const appM=await import(B+"firebase-app.js"),aiM=await import(B+"firebase-ai.js");
   const app=appM.getApps().find(a=>a.name==="ai")||appM.initializeApp(C.firebase,"ai");
+  if(C.recaptchaSiteKey&&!AI.appCheck){try{const acM=await import(B+"firebase-app-check.js");AI.appCheck=acM.initializeAppCheck(app,{provider:new acM.ReCaptchaV3Provider(C.recaptchaSiteKey),isTokenAutoRefreshEnabled:true})}catch(e){console.warn("AppCheck",e)}}
   const ai=aiM.getAI(app,{backend:new aiM.GoogleAIBackend()});
   return aiM.getGenerativeModel(ai,{model:name,generationConfig:{responseMimeType:"application/json",temperature:0.2}});
 }
@@ -633,7 +634,9 @@ function settingsView(){const g=C.departmentGroups,cnt=d=>S.users.filter(u=>u.de
   <label class="f">اسم التطبيق</label><input id="s_app" value="${esc(C.appName)}">
   <label class="f">اسم الجهة / الفرع</label><input id="s_org" value="${esc(C.orgName)}">
   <label class="f">لينك تحميل تطبيق أندرويد (APK)</label><input id="s_apk" dir="ltr" value="${esc(C.apkUrl||"")}" placeholder="https://drive.google.com/...">
-  <p class="mu" style="font-size:12px;margin:6px 0 0">اللينك ده بيظهر للموظفين في الصفحة الرئيسية تحت زرار "تحميل للأندرويد".</p></div>
+  <p class="mu" style="font-size:12px;margin:6px 0 0">اللينك ده بيظهر للموظفين في الصفحة الرئيسية تحت زرار "تحميل للأندرويد".</p>
+  <label class="f">مفتاح حماية الذكاء الاصطناعي (reCAPTCHA Site key)</label><input id="s_rc" dir="ltr" value="${esc(C.recaptchaSiteKey||"")}" placeholder="6L...">
+  <p class="mu" style="font-size:12px;margin:6px 0 0">ده المفتاح العام (Site key) — مش السري. بعد الحفظ اقفل التطبيق وافتحه تاني.</p></div>
   <div class="card"><h3>⭐ درجات التقييم (%)</h3><div class="row">
    ${[["beforeD1","قبل الموعد الأول"],["beforeD2","قبل الموعد الثاني"],["beforeD3","قبل الموعد النهائي"],["lateStart","أول يوم تأخير"],["latePerDay","خصم كل يوم تأخير"]].map(([k,l])=>`<div class="grow" style="min-width:140px"><label class="f">${l}</label><input type="number" min="0" max="100" id="s_${k}" value="${sc[k]}"></div>`).join("")}</div></div>
   <div class="card"><h3>📅 المواعيد الافتراضية للتكليف الجديد (بالأيام)</h3><div class="row">${[0,1,2].map(i=>`<div class="grow"><label class="f">${DL[i+1]}</label><input type="number" min="0" step="0.5" id="s_dd${i}" value="${dd[i]}"></div>`).join("")}</div></div>
@@ -644,7 +647,7 @@ function settingsView(){const g=C.departmentGroups,cnt=d=>S.users.filter(u=>u.de
   <p class="mu" style="font-size:12px">تعديل اسم إدارة بيتطبّق تلقائيًا على موظفيها وتكليفاتها القديمة.</p>`}
 function cloneGroups(){return JSON.parse(JSON.stringify(C.departmentGroups))}
 async function saveSettings(){const n=id=>Number($("#s_"+id).value);
-  const p={appName:$("#s_app").value.trim()||C.appName,orgName:$("#s_org").value.trim()||C.orgName,apkUrl:$("#s_apk").value.trim(),
+  const p={appName:$("#s_app").value.trim()||C.appName,orgName:$("#s_org").value.trim()||C.orgName,apkUrl:$("#s_apk").value.trim(),recaptchaSiteKey:$("#s_rc").value.trim(),
     scores:{beforeD1:n("beforeD1"),beforeD2:n("beforeD2"),beforeD3:n("beforeD3"),lateStart:n("lateStart"),latePerDay:n("latePerDay")},defaultDueDays:[n("dd0"),n("dd1"),n("dd2")]};
   if(!(p.defaultDueDays[0]<=p.defaultDueDays[1]&&p.defaultDueDays[1]<=p.defaultDueDays[2]))return toast("المواعيد لازم تكون بالترتيب");
   try{await DB.saveSettings(p);toast("الإعدادات اتحفظت ✓")}catch(x){toast(errMsg(x))}}
